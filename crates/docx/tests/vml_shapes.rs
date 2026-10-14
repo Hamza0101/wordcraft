@@ -191,3 +191,52 @@ fn a_pict_of_a_rect_a_text_box_and_a_group_all_come_through() {
     let InlineObject::Group { children, .. } = &paras(&back)[2].objects[0] else { panic!() };
     assert_eq!(children.len(), 1, "the group keeps its member");
 }
+
+/// The text of text box story `id`, its paragraphs joined by newlines.
+fn part_text(d: &Document, id: u32) -> String {
+    d.parts.get(&id).map(|p| p.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect::<Vec<_>>().join("\n")).unwrap_or_default()
+}
+
+#[test]
+fn a_group_of_several_text_boxes_keeps_every_one() {
+    // Reported on #1643 by @KNUFFIXX, whose fixture is a `_x0000_t202` pair side by side in one
+    // inline `v:group`: only box A came through a convert. `vml_textbox` recurses to the first
+    // box with content, so before this every later box in a group was dropped -- and a text box
+    // is the one member a group used to keep, which is why this case looked half-working.
+    let shape = |left: u32, height: u32, label: &str| {
+        let paras: String = (1..=3).map(|n| format!(r#"<w:p><w:r><w:t xml:space="preserve">{label} line {n}</w:t></w:r></w:p>"#)).collect();
+        format!(
+            r##"<v:shape style="position:absolute;left:{left};top:100;width:3500;height:{height}" type="#_x0000_t202" filled="false" stroked="true"><v:textbox inset="0,0,0,0"><w:txbxContent>{paras}</w:txbxContent></v:textbox></v:shape>"##
+        )
+    };
+    // The control fixture, and the overflow one where box B is too short for its text; the
+    // height of a box must not decide whether it is read.
+    for (height_b, label_b) in [(1600, "Box B (tall)"), (400, "Box B (short)")] {
+        let d = read_body(&pict(&format!(
+            concat!(
+                r##"<v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"/>"##,
+                r##"<v:group style="width:400pt;height:100pt" coordorigin="0,0" coordsize="8000,2000">{}{}</v:group>"##,
+            ),
+            shape(100, 1600, "Box A (tall)"),
+            shape(4200, height_b, label_b),
+        )));
+        let InlineObject::Group { ch_w, ch_h, children, .. } = &objects(&d)[0] else { panic!("{:?}", objects(&d)) };
+        assert_eq!((*ch_w, *ch_h), (8000.0, 2000.0), "the group's member space");
+        assert_eq!(children.len(), 2, "both boxes, with box B {height_b} high");
+        assert_eq!((children[0].x, children[1].x), (100.0, 4200.0), "side by side");
+
+        let stories: Vec<u32> = children.iter().filter_map(|c| c.obj.text_box()).collect();
+        assert_eq!(stories.len(), 2, "each box has its own story");
+        assert_ne!(stories[0], stories[1]);
+        assert_eq!(part_text(&d, stories[0]), "Box A (tall) line 1\nBox A (tall) line 2\nBox A (tall) line 3");
+        assert_eq!(part_text(&d, stories[1]), format!("{label_b} line 1\n{label_b} line 2\n{label_b} line 3"));
+
+        // Saved and read again -- the step the report loses the text at.
+        let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        let InlineObject::Group { children: again, .. } = &objects(&back)[0] else { panic!() };
+        let back_stories: Vec<u32> = again.iter().filter_map(|c| c.obj.text_box()).collect();
+        assert_eq!(back_stories.len(), 2, "both boxes survive the save");
+        assert_eq!(part_text(&back, back_stories[0]), part_text(&d, stories[0]));
+        assert_eq!(part_text(&back, back_stories[1]), part_text(&d, stories[1]));
+    }
+}
