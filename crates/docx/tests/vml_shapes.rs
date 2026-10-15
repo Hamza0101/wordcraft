@@ -240,3 +240,33 @@ fn a_group_of_several_text_boxes_keeps_every_one() {
         assert_eq!(part_text(&back, back_stories[1]), part_text(&d, stories[1]));
     }
 }
+
+#[test]
+fn a_group_member_finds_its_shapetype_beside_the_group() {
+    // Word writes each `v:shapetype` once, at its first use, as a child of the `w:pict` -- so a
+    // group's member refers to one that is its *parent's* sibling, not its own. The member here
+    // carries no geometry and no colours of its own: its diamond shape comes from the
+    // shapetype's `o:spt` (4) and its fill from the shapetype's `fillcolor`.
+    let d = read_body(&pict(concat!(
+        r##"<v:shapetype id="_x0000_t4" o:spt="4" fillcolor="#0000ff"/>"##,
+        r#"<v:group style="width:100pt;height:50pt" coordsize="1000,500">"#,
+        r##"<v:shape style="left:0;top:0;width:400;height:500" type="#_x0000_t4"/>"##,
+        r#"</v:group>"#,
+    )));
+    let InlineObject::Group { children, .. } = &objects(&d)[0] else { panic!("{:?}", objects(&d)) };
+    assert_eq!(children.len(), 1, "the member is read");
+    let InlineObject::Shape { kind, fill, .. } = children[0].obj else { panic!("{:?}", children[0].obj) };
+    assert_eq!(kind, ShapeKind::Diamond, "the preset comes from the shapetype's o:spt");
+    assert_eq!(fill, Some(wordcraft_doc::Rgb(0x00, 0x00, 0xff)), "and the fill from its fillcolor");
+}
+
+#[test]
+fn a_top_level_shape_still_finds_its_shapetype() {
+    // The same lookup for a shape that is not in a group, which is what it was written for.
+    let d = read_body(&pict(concat!(
+        r##"<v:shapetype id="_x0000_t4" o:spt="4" fillcolor="#00ff00"/>"##,
+        r##"<v:shape style="width:40pt;height:40pt" type="#_x0000_t4"/>"##,
+    )));
+    let InlineObject::Shape { kind, fill, .. } = objects(&d)[0] else { panic!("{:?}", objects(&d)) };
+    assert_eq!((kind, fill), (ShapeKind::Diamond, Some(wordcraft_doc::Rgb(0x00, 0xff, 0x00))));
+}
