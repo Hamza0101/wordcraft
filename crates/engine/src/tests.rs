@@ -9238,6 +9238,44 @@ fn copying_a_list_keeps_its_numbers_and_bullets() {
     assert_eq!(txt, s.clipboard_text);
 }
 
+/// Pasting WordCraft's own copy of a list back in: Copy puts the labelled text on the system
+/// clipboard (`1.\tItem 1`), and Paste compares the text the host hands back with what Copy put
+/// there. It used to compare with the fragment's *unlabelled* text, so after copying a list the
+/// two differed, our own copy looked like another program's, and Paste typed out `1.\tItem 1` as
+/// plain text instead of inserting the items (#2023 review).
+#[test]
+fn pasting_our_own_copy_of_a_list_inserts_the_items() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Item 1\nItem 2"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    let clipboard = s.clipboard_text.clone();
+    assert_eq!(clipboard, "1.\tItem 1\n2.\tItem 2");
+
+    // A new document, and the host hands back exactly what Copy gave it.
+    let mut t = s;
+    run(&mut t, "document.setText", json!({"text": ""}));
+    run(&mut t, "select.all", json!({}));
+    run(&mut t, "edit.paste", json!({"text": clipboard.clone()}));
+    assert_eq!(t.doc.plain_text(StoryRef::Body), "Item 1\nItem 2", "the items, without the labels typed out");
+    let paras: Vec<_> = (0..2).filter_map(|b| t.doc.para_at(&Pos::body(b, 0))).collect();
+    assert_eq!(paras.len(), 2, "two paragraphs");
+    assert!(paras.iter().all(|p| p.props.numbering.is_some_and(|n| n.num != 0)), "pasted as list items");
+    assert!(!t.doc.plain_text(StoryRef::Body).contains('\t'), "no tab from the label");
+
+    // And Paste Special still knows the copy is ours, so "keep source formatting" is among the
+    // formats it offers -- the choice that was lost when our own copy looked foreign.
+    let formats = run(&mut t, "edit.pasteSpecial", json!({"text": clipboard}));
+    assert!(formats.to_string().contains("formatted"), "the formatted source is offered: {formats}");
+
+    // Text the host changed since (another program copied) is still pasted as plain text.
+    run(&mut t, "select.all", json!({}));
+    run(&mut t, "edit.paste", json!({"text": "from elsewhere"}));
+    assert_eq!(t.doc.plain_text(StoryRef::Body), "from elsewhere");
+}
+
 #[test]
 fn copying_text_that_is_not_a_list_is_unchanged() {
     // The guard: a copy with no list paragraph keeps the document's own shown text, so tables,
